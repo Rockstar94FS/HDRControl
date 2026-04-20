@@ -51,7 +51,7 @@ def load_settings():
     TEXTS["AUTORUN"] = texts_parser["TEXTS"]["AUTORUN"]
     TEXTS["PAUSE"] = texts_parser["TEXTS"]["PAUSE"]
     TEXTS["NOTIFICATIONS"] = texts_parser["TEXTS"]["NOTIFICATIONS"]
-    TEXTS["RUN"] = texts_parser["TEXTS"]["RUN"]
+    # TEXTS["RUN"] = texts_parser["TEXTS"]["RUN"]
     TEXTS["PRIMARY_DISPLAY"] = texts_parser["TEXTS"]["PRIMARY_DISPLAY"]
     TEXTS["SETTINGS_DIR"] = texts_parser["TEXTS"]["SETTINGS_DIR"]
     TEXTS["SETTINGS_FILE"] = texts_parser["TEXTS"]["SETTINGS_FILE"]
@@ -199,28 +199,28 @@ def open_settings_file():
 def start_tray():
     global TRAY
 
-    def run_app(path):
-        def _run():
-            os.startfile(path)
-        return _run
+    # def run_app(path):
+        # def _run():
+            # os.startfile(path)
+        # return _run
 
-    def add_apps_submenu():
-        items = []
+    # def add_apps_submenu():
+        # items = []
 
-        for name, path in sorted(APPS.items(), key=lambda x: x[0].lower()):
-            items.append(
-                item(name, run_app(path))
-            )
+        # for name, path in sorted(APPS.items(), key=lambda x: x[0].lower()):
+            # items.append(
+                # item(name, run_app(path))
+            # )
 
-        return items
+        # return items
 
     TRAY = pystray.Icon(
         APP_NAME,
         None,
         APP_NAME,
         menu=pystray.Menu(
-            item(TEXTS["RUN"], pystray.Menu(*add_apps_submenu())),
-            pystray.Menu.SEPARATOR,
+            # item(TEXTS["RUN"], pystray.Menu(*add_apps_submenu())),
+            # pystray.Menu.SEPARATOR,
             item(TEXTS["SETTINGS_DIR"], open_settings_folder),
             item(TEXTS["SETTINGS_FILE"], open_settings_file),
             pystray.Menu.SEPARATOR,
