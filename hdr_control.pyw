@@ -8,40 +8,47 @@ import configparser
 import threading
 import time
 import ctypes
-from win11toast import toast
+from win11toast import notify
 import win32com.client
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 APP_NAME = "HDR Control"
-SETTINGS = {}
-TEXTS = {}
+
+SETTINGS, TEXTS, APPS = {}, {}, {}
+
 TRAY = None
-APPS = {}
 
 HDR = ctypes.CDLL(os.path.join(BASE_DIR, "resources/HDRSwitch.dll"))
 HDR_ENABLED = bool(HDR.GetGlobalHDRState())
 
 ICON_ON_PATH = os.path.join(BASE_DIR, "resources/hdr_on.ico")
 ICON_OFF_PATH = os.path.join(BASE_DIR, "resources/hdr_off.ico")
-LOGO_PATH = os.path.join(BASE_DIR, "resources/hdr_logo.ico")
+LOGO_ON_PATH = os.path.join(BASE_DIR, "resources/hdr_logo_on.ico")
+LOGO_OFF_PATH = os.path.join(BASE_DIR, "resources/hdr_logo_off.ico")
 SETTINGS_PATH = os.path.join(BASE_DIR, "settings/settings.ini")
 APPS_PATH = os.path.join(BASE_DIR, "settings/apps.ini")
 
+
 def load_settings():
-    global SETTINGS, TEXTS
+    global SETTINGS
 
     settings_parser = configparser.ConfigParser()
+    settings_parser.optionxform = str
     settings_parser.read(SETTINGS_PATH)
 
-    SETTINGS = {}
     SETTINGS["LANGUAGE"] = settings_parser["UI"]["LANGUAGE"]
     SETTINGS["NOTIFICATIONS"] = settings_parser["UI"].getboolean("NOTIFICATIONS")
     SETTINGS["UPDATE_TIME"] = settings_parser["GENERAL"].getfloat("UPDATE_TIME")
     SETTINGS["PAUSE"] = settings_parser["GENERAL"].getboolean("PAUSE")
     SETTINGS["PRIMARY"] = settings_parser["GENERAL"].getboolean("PRIMARY")
+    SETTINGS["LANGS"] = [lang.strip() for lang in settings_parser["UI"]["AVAILABLE_LANGUAGES"].split(",")]
+
+def load_texts():
+    global TEXTS
 
     texts_parser = configparser.ConfigParser()
+    texts_parser.optionxform = str
     texts_parser.read(os.path.join(BASE_DIR, f"language/lang_{SETTINGS['LANGUAGE']}.ini"))
 
     TEXTS = {}
@@ -51,18 +58,25 @@ def load_settings():
     TEXTS["AUTORUN"] = texts_parser["TEXTS"]["AUTORUN"]
     TEXTS["PAUSE"] = texts_parser["TEXTS"]["PAUSE"]
     TEXTS["NOTIFICATIONS"] = texts_parser["TEXTS"]["NOTIFICATIONS"]
-    # TEXTS["RUN"] = texts_parser["TEXTS"]["RUN"]
     TEXTS["PRIMARY_DISPLAY"] = texts_parser["TEXTS"]["PRIMARY_DISPLAY"]
     TEXTS["SETTINGS_DIR"] = texts_parser["TEXTS"]["SETTINGS_DIR"]
     TEXTS["SETTINGS_FILE"] = texts_parser["TEXTS"]["SETTINGS_FILE"]
+    TEXTS["UPDATE"] = texts_parser["TEXTS"]["UPDATE"]
+    TEXTS["LANGUAGE"] = texts_parser["TEXTS"]["LANGUAGE"]
+
+    for key, value in texts_parser["TEXTS"].items():
+        if key.startswith("LANG_"):
+            TEXTS[key] = value
 
 def save_settings():
     settings_parser = configparser.ConfigParser()
+    settings_parser.optionxform = str
     settings_parser.read(SETTINGS_PATH)
 
     settings_parser["GENERAL"]["PAUSE"] = str(SETTINGS["PAUSE"]).lower()
     settings_parser["GENERAL"]["PRIMARY"] = str(SETTINGS["PRIMARY"]).lower()
     settings_parser["UI"]["NOTIFICATIONS"] = str(SETTINGS["NOTIFICATIONS"]).lower()
+    settings_parser["UI"]["LANGUAGE"] = str(SETTINGS["LANGUAGE"]).lower()
 
     with open(SETTINGS_PATH, "w") as f:
         settings_parser.write(f)
@@ -117,12 +131,14 @@ def enable_hdr(is_enabled):
         update_icon()
 
         if SETTINGS["NOTIFICATIONS"]:
-            toast_text = TEXTS["HDR_OFF"]
+            text = TEXTS["HDR_OFF"]
+            icon = LOGO_OFF_PATH
 
             if HDR_ENABLED:
-                toast_text = TEXTS["HDR_ON"]
+                text = TEXTS["HDR_ON"]
+                icon = LOGO_ON_PATH
 
-            toast(APP_NAME, toast_text, icon=LOGO_PATH)
+            notify(APP_NAME, text, icon = {'src': icon, 'placement': 'appLogoOverride'})
 
 def add_to_autorun():
     shell = win32com.client.Dispatch("WScript.Shell")
@@ -176,16 +192,9 @@ def update_icon():
     TRAY.icon = Image.open(icon)
 
 def is_running():
-    arg = os.path.basename(sys.argv[0])
+    ctypes.windll.kernel32.CreateMutexW(None, False, APP_NAME)
 
-    i = 0
-
-    for q in psutil.process_iter():
-        if 'python' in q.name():
-            if len(q.cmdline()) > 1 and arg in q.cmdline()[1]:
-                i += 1
-
-    return i > 1
+    return ctypes.GetLastError() == 183
 
 def on_close(tray):
     tray.stop()
@@ -196,49 +205,68 @@ def open_settings_folder():
 def open_settings_file():
     os.startfile(os.path.join(BASE_DIR, APPS_PATH))
 
-def start_tray():
+def update_app_list():
+    load_apps()
+
+def change_language(lang_id):
+    def _change_language():
+        SETTINGS["LANGUAGE"] = lang_id
+        save_settings()
+        load_texts()
+        update_tray()
+
+    return _change_language
+
+def is_current_language(lang_id):
+    return SETTINGS["LANGUAGE"] == lang_id
+
+def update_tray():
     global TRAY
 
-    # def run_app(path):
-        # def _run():
-            # os.startfile(path)
-        # return _run
+    def add_langs_submenu():
+        items = []
+        for lang in SETTINGS["LANGS"]:
+            items.append(
+                item(TEXTS[f"LANG_{lang.upper()}"], change_language(lang), checked=lambda item, l=lang: is_current_language(l))
+            )
+        return items
 
-    # def add_apps_submenu():
-        # items = []
+    TRAY.menu = pystray.Menu(
+        item(TEXTS["UPDATE"], update_app_list),
+        pystray.Menu.SEPARATOR,
+        item(TEXTS["SETTINGS_DIR"], open_settings_folder),
+        item(TEXTS["SETTINGS_FILE"], open_settings_file),
+        pystray.Menu.SEPARATOR,
+        item(TEXTS["LANGUAGE"], pystray.Menu(*add_langs_submenu())),
+        pystray.Menu.SEPARATOR,
+        item(TEXTS["PRIMARY_DISPLAY"], toggle_display, checked=lambda item: is_primary_display_enabled()),
+        item(TEXTS["NOTIFICATIONS"], toggle_notification, checked=lambda item: is_notification_enabled()),
+        item(TEXTS["PAUSE"], toggle_pause, checked=lambda item: is_paused()),
+        item(TEXTS["AUTORUN"], add_to_autorun, checked=lambda item: is_autorun_enabled()),
+        pystray.Menu.SEPARATOR,
+        item(TEXTS["CLOSE"], on_close)
+    )
 
-        # for name, path in sorted(APPS.items(), key=lambda x: x[0].lower()):
-            # items.append(
-                # item(name, run_app(path))
-            # )
+    TRAY.update_menu()
 
-        # return items
+def start_tray():
+    global TRAY
 
     TRAY = pystray.Icon(
         APP_NAME,
         None,
         APP_NAME,
-        menu=pystray.Menu(
-            # item(TEXTS["RUN"], pystray.Menu(*add_apps_submenu())),
-            # pystray.Menu.SEPARATOR,
-            item(TEXTS["SETTINGS_DIR"], open_settings_folder),
-            item(TEXTS["SETTINGS_FILE"], open_settings_file),
-            pystray.Menu.SEPARATOR,
-            item(TEXTS["PRIMARY_DISPLAY"], toggle_display, checked=lambda item: is_primary_display_enabled()),
-            item(TEXTS["NOTIFICATIONS"], toggle_notification, checked=lambda item: is_notification_enabled()),
-            item(TEXTS["PAUSE"], toggle_pause, checked=lambda item: is_paused()),
-            item(TEXTS["AUTORUN"], add_to_autorun, checked=lambda item: is_autorun_enabled()),
-            pystray.Menu.SEPARATOR,
-            item(TEXTS["CLOSE"], on_close)
-        )
+        menu=None
     )
 
+    update_tray()
     update_icon()
 
     TRAY.run()
 
 if not is_running():
     load_settings()
+    load_texts()
     load_apps()
     thread = threading.Thread(target=monitor_apps, daemon=True)
     thread.start()
