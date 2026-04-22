@@ -10,14 +10,16 @@ import time
 import ctypes
 from win11toast import notify
 import win32com.client
+import tkinter as tk
+from tkinter import ttk
+from tkinter import filedialog
+import win32api
+import tkinter.messagebox as messagebox
+import locale
+
+APP_NAME, SETTINGS, TEXTS, APPS, TRAY = "HDR Control", {}, {}, [], None
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-APP_NAME = "HDR Control"
-
-SETTINGS, TEXTS, APPS = {}, {}, {}
-
-TRAY = None
 
 HDR = ctypes.CDLL(os.path.join(BASE_DIR, "resources/HDRSwitch.dll"))
 HDR_ENABLED = bool(HDR.GetGlobalHDRState())
@@ -29,7 +31,6 @@ LOGO_OFF_PATH = os.path.join(BASE_DIR, "resources/hdr_logo_off.ico")
 SETTINGS_PATH = os.path.join(BASE_DIR, "settings/settings.ini")
 APPS_PATH = os.path.join(BASE_DIR, "settings/apps.ini")
 
-
 def load_settings():
     global SETTINGS
 
@@ -37,46 +38,36 @@ def load_settings():
     settings_parser.optionxform = str
     settings_parser.read(SETTINGS_PATH)
 
-    SETTINGS["LANGUAGE"] = settings_parser["UI"]["LANGUAGE"]
-    SETTINGS["NOTIFICATIONS"] = settings_parser["UI"].getboolean("NOTIFICATIONS")
-    SETTINGS["UPDATE_TIME"] = settings_parser["GENERAL"].getfloat("UPDATE_TIME")
-    SETTINGS["PAUSE"] = settings_parser["GENERAL"].getboolean("PAUSE")
-    SETTINGS["PRIMARY"] = settings_parser["GENERAL"].getboolean("PRIMARY")
-    SETTINGS["LANGS"] = [lang.strip() for lang in settings_parser["UI"]["AVAILABLE_LANGUAGES"].split(",")]
+    SETTINGS["notifications"] = settings_parser["settings"].getboolean("notifications")
+    SETTINGS["update_time"] = settings_parser["settings"].getfloat("update_time")
+    SETTINGS["pause"] = settings_parser["settings"].getboolean("pause")
+    SETTINGS["primary"] = settings_parser["settings"].getboolean("primary")
+    SETTINGS["pos_x"] = settings_parser["settings"].getint("pos_x")
+    SETTINGS["pos_y"] = settings_parser["settings"].getint("pos_y")
+    SETTINGS["scale_x"] = settings_parser["settings"].getint("scale_x")
+    SETTINGS["scale_y"] = settings_parser["settings"].getint("scale_y")
 
 def load_texts():
     global TEXTS
 
+    lang = locale.windows_locale.get(ctypes.windll.kernel32.GetUserDefaultUILanguage(), "en_US")
+    path = os.path.join(BASE_DIR, f"language/lang_{lang}.ini")
+
+    if not os.path.exists(path):
+        path = os.path.join(BASE_DIR, "language/lang_en_US.ini")
+
     texts_parser = configparser.ConfigParser()
     texts_parser.optionxform = str
-    texts_parser.read(os.path.join(BASE_DIR, f"language/lang_{SETTINGS['LANGUAGE']}.ini"))
+    texts_parser.read(path)
 
     TEXTS = {}
-    TEXTS["CLOSE"] = texts_parser["TEXTS"]["CLOSE"]
-    TEXTS["HDR_ON"] = texts_parser["TEXTS"]["HDR_ON"]
-    TEXTS["HDR_OFF"] = texts_parser["TEXTS"]["HDR_OFF"]
-    TEXTS["AUTORUN"] = texts_parser["TEXTS"]["AUTORUN"]
-    TEXTS["PAUSE"] = texts_parser["TEXTS"]["PAUSE"]
-    TEXTS["NOTIFICATIONS"] = texts_parser["TEXTS"]["NOTIFICATIONS"]
-    TEXTS["PRIMARY_DISPLAY"] = texts_parser["TEXTS"]["PRIMARY_DISPLAY"]
-    TEXTS["SETTINGS_DIR"] = texts_parser["TEXTS"]["SETTINGS_DIR"]
-    TEXTS["SETTINGS_FILE"] = texts_parser["TEXTS"]["SETTINGS_FILE"]
-    TEXTS["UPDATE"] = texts_parser["TEXTS"]["UPDATE"]
-    TEXTS["LANGUAGE"] = texts_parser["TEXTS"]["LANGUAGE"]
-
-    for key, value in texts_parser["TEXTS"].items():
-        if key.startswith("LANG_"):
-            TEXTS[key] = value
+    TEXTS = dict(texts_parser["texts"])
 
 def save_settings():
     settings_parser = configparser.ConfigParser()
     settings_parser.optionxform = str
-    settings_parser.read(SETTINGS_PATH)
 
-    settings_parser["GENERAL"]["PAUSE"] = str(SETTINGS["PAUSE"]).lower()
-    settings_parser["GENERAL"]["PRIMARY"] = str(SETTINGS["PRIMARY"]).lower()
-    settings_parser["UI"]["NOTIFICATIONS"] = str(SETTINGS["NOTIFICATIONS"]).lower()
-    settings_parser["UI"]["LANGUAGE"] = str(SETTINGS["LANGUAGE"]).lower()
+    settings_parser["settings"] = SETTINGS.copy()
 
     with open(SETTINGS_PATH, "w") as f:
         settings_parser.write(f)
@@ -86,36 +77,64 @@ def load_apps():
 
     apps_parser = configparser.ConfigParser()
     apps_parser.optionxform = str
-    apps_parser.read(APPS_PATH)
+    apps_parser.read(APPS_PATH, encoding="utf-8")
 
-    APPS = dict(apps_parser["APPS"])
+    APPS = []
+
+    for section in apps_parser.sections():
+        app = {
+            "path": apps_parser.get(section, "path"),
+            "name": apps_parser.get(section, "name"),
+            "enabled": apps_parser.getboolean(section, "enabled")
+        }
+
+        APPS.append(app)
+
+def save_apps():
+    global APPS
+
+    apps_parser = configparser.ConfigParser()
+    apps_parser.optionxform = str
+
+    for i, app in enumerate(APPS, start=1):
+        section = f"app_{i:03d}"
+
+        apps_parser[section] = {
+            "path": str(app["path"]),
+            "name": str(app["name"]),
+            "enabled": str(app["enabled"]).lower()
+        }
+
+    with open(APPS_PATH, "w", encoding="utf-8") as f:
+        apps_parser.write(f)
 
 def check_running_apps():
     processes = set()
 
     for p in psutil.process_iter(['name']):
         try:
-            processes.add(p.info['name'])
+            processes.add((p.info['name'] or "").lower())
         except:
             pass
 
     found_app = False
 
-    for name, path in APPS.items():
-        exe_name = os.path.basename(path)
+    for app in APPS:
+        if app.get("enabled"):
+            exe_name = os.path.basename(app.get("path")).lower()
 
-        if exe_name in processes:
-            found_app = True
-            break
+            if exe_name in processes:
+                found_app = True
+                break
 
     enable_hdr(found_app)
 
 def monitor_apps():
     while True:
-        if not SETTINGS["PAUSE"]:
+        if not SETTINGS["pause"]:
             check_running_apps()
 
-        time.sleep(SETTINGS["UPDATE_TIME"])
+        time.sleep(SETTINGS["update_time"])
 
 def enable_hdr(is_enabled):
     global HDR_ENABLED
@@ -123,19 +142,19 @@ def enable_hdr(is_enabled):
     if HDR_ENABLED != is_enabled:
         HDR_ENABLED = is_enabled
 
-        if SETTINGS["PRIMARY"]:
+        if SETTINGS["primary"]:
             HDR.SetHDRonPrimary(HDR_ENABLED)
         else:
             HDR.SetGlobalHDRState(HDR_ENABLED)
 
         update_icon()
 
-        if SETTINGS["NOTIFICATIONS"]:
-            text = TEXTS["HDR_OFF"]
+        if SETTINGS["notifications"]:
+            text = TEXTS["hdr_off_notification"]
             icon = LOGO_OFF_PATH
 
             if HDR_ENABLED:
-                text = TEXTS["HDR_ON"]
+                text = TEXTS["hdr_on_notification"]
                 icon = LOGO_ON_PATH
 
             notify(APP_NAME, text, icon = {'src': icon, 'placement': 'appLogoOverride'})
@@ -163,25 +182,25 @@ def is_autorun_enabled():
     return os.path.exists(shortcut_path)
 
 def toggle_pause():
-    SETTINGS["PAUSE"] = not SETTINGS["PAUSE"]
+    SETTINGS["pause"] = not SETTINGS["pause"]
     save_settings()
 
 def is_paused():
-    return SETTINGS["PAUSE"]
+    return SETTINGS["pause"]
 
 def toggle_notification():
-    SETTINGS["NOTIFICATIONS"] = not SETTINGS["NOTIFICATIONS"]
+    SETTINGS["notifications"] = not SETTINGS["notifications"]
     save_settings()
 
 def is_notification_enabled():
-    return SETTINGS["NOTIFICATIONS"]
+    return SETTINGS["notifications"]
 
 def toggle_display():
-    SETTINGS["PRIMARY"] = not SETTINGS["PRIMARY"]
+    SETTINGS["primary"] = not SETTINGS["primary"]
     save_settings()
 
 def is_primary_display_enabled():
-    return SETTINGS["PRIMARY"]
+    return SETTINGS["primary"]
 
 def update_icon():
     icon = ICON_OFF_PATH
@@ -199,75 +218,204 @@ def is_running():
 def on_close(tray):
     tray.stop()
 
-def open_settings_folder():
-    os.startfile(os.path.join(BASE_DIR, "settings"))
-
-def open_settings_file():
-    os.startfile(os.path.join(BASE_DIR, APPS_PATH))
-
-def update_app_list():
-    load_apps()
-
-def change_language(lang_id):
-    def _change_language():
-        SETTINGS["LANGUAGE"] = lang_id
+def _open_manage_window():
+    def window_close():
+        SETTINGS["pos_x"], SETTINGS["pos_y"], SETTINGS["scale_x"], SETTINGS["scale_y"] = window.winfo_x(), window.winfo_y(), window.winfo_width(), window.winfo_height()
         save_settings()
-        load_texts()
-        update_tray()
+        window.destroy()
 
-    return _change_language
+    def window_get_app_name(path):
+        filename = os.path.splitext(os.path.basename(path))[0]
 
-def is_current_language(lang_id):
-    return SETTINGS["LANGUAGE"] == lang_id
+        try:
+            language, codepage = win32api.GetFileVersionInfo(path, '\\VarFileInfo\\Translation')[0]
+            file_info = u'\\StringFileInfo\\%04X%04X\\%s' % (language, codepage, "ProductName")
+            product_name = win32api.GetFileVersionInfo(path, file_info)
 
-def update_tray():
-    global TRAY
+            return product_name or filename
+        except:
+            pass
 
-    def add_langs_submenu():
-        items = []
-        for lang in SETTINGS["LANGS"]:
-            items.append(
-                item(TEXTS[f"LANG_{lang.upper()}"], change_language(lang), checked=lambda item, l=lang: is_current_language(l))
-            )
-        return items
+        return filename
 
-    TRAY.menu = pystray.Menu(
-        item(TEXTS["UPDATE"], update_app_list),
-        pystray.Menu.SEPARATOR,
-        item(TEXTS["SETTINGS_DIR"], open_settings_folder),
-        item(TEXTS["SETTINGS_FILE"], open_settings_file),
-        pystray.Menu.SEPARATOR,
-        item(TEXTS["LANGUAGE"], pystray.Menu(*add_langs_submenu())),
-        pystray.Menu.SEPARATOR,
-        item(TEXTS["PRIMARY_DISPLAY"], toggle_display, checked=lambda item: is_primary_display_enabled()),
-        item(TEXTS["NOTIFICATIONS"], toggle_notification, checked=lambda item: is_notification_enabled()),
-        item(TEXTS["PAUSE"], toggle_pause, checked=lambda item: is_paused()),
-        item(TEXTS["AUTORUN"], add_to_autorun, checked=lambda item: is_autorun_enabled()),
-        pystray.Menu.SEPARATOR,
-        item(TEXTS["CLOSE"], on_close)
-    )
+    def window_double_click(event):
+        selected = apps_tree.selection()
 
-    TRAY.update_menu()
+        if selected:
+            path = selected[0]
+
+            for app in APPS:
+                if app["path"] == path:
+                    app["enabled"] = not app["enabled"]
+                    window_update_list()
+                    break
+
+    def window_remove_app():
+        selected = apps_tree.selection()
+
+        if selected:
+            path = selected[0]
+
+            for app in APPS:
+                if app["path"] == path:
+                    confirm = messagebox.askyesno(
+                        TEXTS["remove_popup"],
+                        TEXTS["remove_confirm_popup"].format(
+                            app_name=app["name"].upper()
+                        )
+                    )
+
+                    if confirm:
+                        APPS.remove(app)
+                        window_update_list()
+                    break
+
+    def window_add_app():
+        path = filedialog.askopenfilename(
+            title=TEXTS["exe_popup"],
+            filetypes=[(TEXTS["exe_desc_popup"], "*.exe")]
+        )
+
+        if path and os.path.splitext(path)[1].lower() == ".exe":
+            for app in APPS:
+                if app.get("path") == path:
+                    return
+
+            app = {
+                "name": window_get_app_name(path),
+                "path": path,
+                "enabled": True
+            }
+
+            APPS.append(app)
+            window_update_list()
+
+    def window_update_list(save=True):
+        apps_tree.delete(*apps_tree.get_children())
+
+        for app in sorted(APPS, key=lambda x: x.get("name").lower()):
+            apps_tree.insert("", "end", iid=app["path"], values=("🗹" if app.get("enabled") else "☐", app.get("name"), app.get("path")))
+
+        if save:
+            save_apps()
+
+    def window_resize(event):
+        total_width = apps_tree.winfo_width()
+
+        checkbox_width = 30
+        columns_width = total_width - checkbox_width
+
+        apps_tree.column("checkbox", width=checkbox_width)
+        apps_tree.column("name", width=int(columns_width * 0.33))
+        apps_tree.column("path", width=int(columns_width * 0.65))
+
+    window = tk.Tk()
+
+    window.title(APP_NAME)
+    window.iconbitmap(ICON_ON_PATH)
+    window.minsize(900, 450)
+    window.maxsize(1200, 900)
+    window.geometry(f"{SETTINGS["scale_x"]}x{SETTINGS["scale_y"]}+{SETTINGS["pos_x"]}+{SETTINGS["pos_y"]}")
+
+    apps_frame = ttk.Frame(window)
+    apps_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+    scrollbar = ttk.Scrollbar(apps_frame, orient="vertical")
+    scrollbar.pack(side="right", fill="y")
+
+    apps_tree = ttk.Treeview(apps_frame, columns=("checkbox", "name", "path"), show="headings", yscrollcommand=scrollbar.set)
+    apps_tree.pack(fill="both", expand=True)
+
+    apps_tree.heading("checkbox", text="")
+    apps_tree.heading("name", text=TEXTS["name_window"], anchor="w")
+    apps_tree.heading("path", text=TEXTS["path_window"], anchor="w")
+
+    apps_tree.column("checkbox", anchor="center")
+
+    apps_tree.bind("<Configure>", window_resize)
+    apps_tree.bind("<Double-1>", window_double_click)
+
+    scrollbar.config(command=apps_tree.yview)
+
+    button_frame = ttk.Frame(window)
+    button_frame.pack(fill="x", padx=10, pady=(0, 15))
+
+    ttk.Button(button_frame, text=TEXTS["add_window"], command=window_add_app).pack(side="left", padx=(0, 10))
+    ttk.Button(button_frame, text=TEXTS["remove_window"], command=window_remove_app).pack(side="left", padx=(0, 10))
+
+    window_update_list(False)
+
+    window.protocol("WM_DELETE_WINDOW", window_close)
+    window.mainloop()
+
+def open_manage_window(icon, event):
+    open_window = True
+
+    for t in threading.enumerate():
+        if "_open_manage_window" in t.name:
+            open_window = False
+
+    if open_window:
+        threading.Thread(target=_open_manage_window, daemon=True).start()
+
+def set_update_time(time):
+    SETTINGS["update_time"] = time
+    save_settings()
+
+class Win32PystrayIcon(pystray.Icon):
+    WM_LBUTTONDBLCLK = 0x0203
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if 'on_double_click' in kwargs:
+            self.on_double_click = kwargs['on_double_click']
+
+    def _on_notify(self, wparam, lparam):
+        super()._on_notify(wparam, lparam)
+        if lparam == self.WM_LBUTTONDBLCLK:
+            self.on_double_click(self, None)
 
 def start_tray():
     global TRAY
 
-    TRAY = pystray.Icon(
+    TRAY = Win32PystrayIcon(
         APP_NAME,
         None,
         APP_NAME,
-        menu=None
+        menu=pystray.Menu(
+            item(TEXTS["update_speed_menu"], pystray.Menu(
+                item(TEXTS["update_speed_fast_menu"],
+                    lambda: set_update_time(1),
+                    checked=lambda item: SETTINGS["update_time"] == 1),
+                item(TEXTS["update_speed_normal_menu"],
+                    lambda: set_update_time(2),
+                    checked=lambda item: SETTINGS["update_time"] == 2),
+                item(TEXTS["update_speed_slow_menu"],
+                    lambda: set_update_time(3),
+                    checked=lambda item: SETTINGS["update_time"] == 3),
+            )),
+            pystray.Menu.SEPARATOR,
+            item(TEXTS["primary_display_menu"], toggle_display, checked=lambda item: is_primary_display_enabled()),
+            item(TEXTS["notifications_menu"], toggle_notification, checked=lambda item: is_notification_enabled()),
+            item(TEXTS["pause_menu"], toggle_pause, checked=lambda item: is_paused()),
+            item(TEXTS["autorun_menu"], add_to_autorun, checked=lambda item: is_autorun_enabled()),
+            pystray.Menu.SEPARATOR,
+            item(TEXTS["manage_apps_menu"], open_manage_window),
+            pystray.Menu.SEPARATOR,
+            item(TEXTS["close_menu"], on_close)
+        ),
+        on_double_click = open_manage_window
     )
 
-    update_tray()
     update_icon()
-
     TRAY.run()
 
 if not is_running():
     load_settings()
     load_texts()
+
     load_apps()
-    thread = threading.Thread(target=monitor_apps, daemon=True)
-    thread.start()
+
+    threading.Thread(target=monitor_apps, daemon=True).start()
+
     start_tray()
