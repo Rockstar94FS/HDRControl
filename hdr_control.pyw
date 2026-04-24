@@ -38,14 +38,19 @@ def load_settings():
     settings_parser.optionxform = str
     settings_parser.read(SETTINGS_PATH)
 
-    SETTINGS["notifications"] = settings_parser["settings"].getboolean("notifications")
-    SETTINGS["update_time"] = settings_parser["settings"].getfloat("update_time")
-    SETTINGS["pause"] = settings_parser["settings"].getboolean("pause")
-    SETTINGS["primary"] = settings_parser["settings"].getboolean("primary")
-    SETTINGS["pos_x"] = settings_parser["settings"].getint("pos_x")
-    SETTINGS["pos_y"] = settings_parser["settings"].getint("pos_y")
-    SETTINGS["scale_x"] = settings_parser["settings"].getint("scale_x")
-    SETTINGS["scale_y"] = settings_parser["settings"].getint("scale_y")
+    if "settings" not in settings_parser:
+        settings_parser["settings"] = {}
+
+    SETTINGS["notifications"] = settings_parser["settings"].getboolean("notifications", fallback=True)
+    SETTINGS["update_time"] = settings_parser["settings"].getfloat("update_time", fallback=2)
+    SETTINGS["pause"] = settings_parser["settings"].getboolean("pause", fallback=False)
+    SETTINGS["primary"] = settings_parser["settings"].getboolean("primary", fallback=True)
+    SETTINGS["pos_x"] = settings_parser["settings"].getint("pos_x", fallback=130)
+    SETTINGS["pos_y"] = settings_parser["settings"].getint("pos_y", fallback=130)
+    SETTINGS["scale_x"] = settings_parser["settings"].getint("scale_x", fallback=900)
+    SETTINGS["scale_y"] = settings_parser["settings"].getint("scale_y", fallback=450)
+    SETTINGS["run_minimized"] = settings_parser["settings"].getboolean("run_minimized", fallback=True)
+    # SETTINGS["start_menu"] = settings_parser["settings"].getboolean("start_menu", fallback=False)
 
 def load_texts():
     global TEXTS
@@ -97,12 +102,10 @@ def save_apps():
     apps_parser.optionxform = str
 
     for i, app in enumerate(APPS, start=1):
-        section = f"app_{i:03d}"
-
-        apps_parser[section] = {
+        apps_parser[f"app_{i:03d}"] = {
             "path": str(app["path"]),
             "name": str(app["name"]),
-            "enabled": str(app["enabled"]).lower()
+            "enabled": str(app["enabled"])
         }
 
     with open(APPS_PATH, "w", encoding="utf-8") as f:
@@ -185,30 +188,20 @@ def toggle_pause():
     SETTINGS["pause"] = not SETTINGS["pause"]
     save_settings()
 
-def is_paused():
-    return SETTINGS["pause"]
+def toggle_minimized():
+    SETTINGS["run_minimized"] = not SETTINGS["run_minimized"]
+    save_settings()
 
 def toggle_notification():
     SETTINGS["notifications"] = not SETTINGS["notifications"]
     save_settings()
 
-def is_notification_enabled():
-    return SETTINGS["notifications"]
-
 def toggle_display():
     SETTINGS["primary"] = not SETTINGS["primary"]
     save_settings()
 
-def is_primary_display_enabled():
-    return SETTINGS["primary"]
-
 def update_icon():
-    icon = ICON_OFF_PATH
-
-    if HDR_ENABLED:
-        icon = ICON_ON_PATH
-
-    TRAY.icon = Image.open(icon)
+    TRAY.icon = Image.open(ICON_ON_PATH if HDR_ENABLED else ICON_OFF_PATH)
 
 def is_running():
     ctypes.windll.kernel32.CreateMutexW(None, False, APP_NAME)
@@ -242,10 +235,8 @@ def _open_manage_window():
         selected = apps_tree.selection()
 
         if selected:
-            path = selected[0]
-
             for app in APPS:
-                if app["path"] == path:
+                if app["path"] == selected[0]:
                     app["enabled"] = not app["enabled"]
                     window_update_list()
                     break
@@ -254,10 +245,8 @@ def _open_manage_window():
         selected = apps_tree.selection()
 
         if selected:
-            path = selected[0]
-
             for app in APPS:
-                if app["path"] == path:
+                if app["path"] == selected[0]:
                     confirm = messagebox.askyesno(
                         TEXTS["remove_popup"],
                         TEXTS["remove_confirm_popup"].format(
@@ -294,7 +283,12 @@ def _open_manage_window():
         apps_tree.delete(*apps_tree.get_children())
 
         for app in sorted(APPS, key=lambda x: x.get("name").lower()):
-            apps_tree.insert("", "end", iid=app["path"], values=("🗹" if app.get("enabled") else "☐", app.get("name"), app.get("path")))
+            enabled = app.get("enabled")
+            name = app.get("name")
+            path = app.get("path")
+
+
+            apps_tree.insert("", "end", iid=path, values=("🗹" if enabled else "☐", name, path), tags=() if os.path.exists(path) else ("missing"))
 
         if save:
             save_apps()
@@ -311,7 +305,7 @@ def _open_manage_window():
 
     window = tk.Tk()
 
-    window.title(APP_NAME)
+    window.title(TEXTS["title_window"])
     window.iconbitmap(ICON_ON_PATH)
     window.minsize(900, 450)
     window.maxsize(1200, 900)
@@ -335,6 +329,8 @@ def _open_manage_window():
     apps_tree.bind("<Configure>", window_resize)
     apps_tree.bind("<Double-1>", window_double_click)
 
+    apps_tree.tag_configure("missing", foreground="gray")
+
     scrollbar.config(command=apps_tree.yview)
 
     button_frame = ttk.Frame(window)
@@ -345,10 +341,18 @@ def _open_manage_window():
 
     window_update_list(False)
 
+    children = apps_tree.get_children()
+
+    if children:
+        first_child = children[0]
+        apps_tree.selection_set(first_child)
+        apps_tree.focus(first_child)
+        apps_tree.see(first_child)
+
     window.protocol("WM_DELETE_WINDOW", window_close)
     window.mainloop()
 
-def open_manage_window(icon, event):
+def open_manage_window(icon=None, event=None):
     open_window = True
 
     for t in threading.enumerate():
@@ -361,6 +365,27 @@ def open_manage_window(icon, event):
 def set_update_time(time):
     SETTINGS["update_time"] = time
     save_settings()
+
+def is_start_menu_enabled():
+    start_menu = os.path.join(os.environ["APPDATA"], r"Microsoft\Windows\Start Menu\Programs")
+    shortcut_path = os.path.join(start_menu, f"{APP_NAME}.lnk")
+
+    return os.path.exists(shortcut_path)
+
+def add_to_start_menu():
+    shell = win32com.client.Dispatch("WScript.Shell")
+    start_menu = os.path.join(os.environ["APPDATA"], r"Microsoft\Windows\Start Menu\Programs")
+    shortcut_path = os.path.join(start_menu, f"{APP_NAME}.lnk")
+
+    if os.path.exists(shortcut_path):
+        os.remove(shortcut_path)
+    else:
+        shortcut = shell.CreateShortCut(shortcut_path)
+        shortcut.Targetpath = sys.executable
+        shortcut.Arguments = f'"{os.path.abspath(sys.argv[0])}"'
+        shortcut.WorkingDirectory = BASE_DIR
+        shortcut.IconLocation = ICON_ON_PATH
+        shortcut.save()
 
 class Win32PystrayIcon(pystray.Icon):
     WM_LBUTTONDBLCLK = 0x0203
@@ -383,6 +408,8 @@ def start_tray():
         None,
         APP_NAME,
         menu=pystray.Menu(
+            item(TEXTS["manage_apps_menu"], open_manage_window),
+            pystray.Menu.SEPARATOR,
             item(TEXTS["update_speed_menu"], pystray.Menu(
                 item(TEXTS["update_speed_fast_menu"],
                     lambda: set_update_time(1),
@@ -395,12 +422,15 @@ def start_tray():
                     checked=lambda item: SETTINGS["update_time"] == 3),
             )),
             pystray.Menu.SEPARATOR,
-            item(TEXTS["primary_display_menu"], toggle_display, checked=lambda item: is_primary_display_enabled()),
-            item(TEXTS["notifications_menu"], toggle_notification, checked=lambda item: is_notification_enabled()),
-            item(TEXTS["pause_menu"], toggle_pause, checked=lambda item: is_paused()),
+            item(TEXTS["primary_display_menu"], toggle_display, checked=lambda item: SETTINGS["primary"]),
+            item(TEXTS["notifications_menu"], toggle_notification, checked=lambda item: SETTINGS["notifications"]),
+            item(TEXTS["pause_menu"], toggle_pause, checked=lambda item: SETTINGS["pause"]),
+
+
+
+            item(TEXTS["start_menu"], add_to_start_menu, checked=lambda item: is_start_menu_enabled()),
+            item(TEXTS["run_minimized_menu"], toggle_minimized, checked=lambda item: SETTINGS["run_minimized"]),
             item(TEXTS["autorun_menu"], add_to_autorun, checked=lambda item: is_autorun_enabled()),
-            pystray.Menu.SEPARATOR,
-            item(TEXTS["manage_apps_menu"], open_manage_window),
             pystray.Menu.SEPARATOR,
             item(TEXTS["close_menu"], on_close)
         ),
@@ -417,5 +447,8 @@ if not is_running():
     load_apps()
 
     threading.Thread(target=monitor_apps, daemon=True).start()
+
+    if not SETTINGS["run_minimized"]:
+        open_manage_window()
 
     start_tray()
