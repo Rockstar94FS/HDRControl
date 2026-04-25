@@ -10,7 +10,7 @@ import time
 import ctypes
 from win11toast import notify
 import win32com.client
-import tkinter as tk
+from tkinterdnd2 import TkinterDnD, DND_FILES
 from tkinter import ttk
 from tkinter import filedialog
 import win32api
@@ -50,7 +50,6 @@ def load_settings():
     SETTINGS["scale_x"] = settings_parser["settings"].getint("scale_x", fallback=900)
     SETTINGS["scale_y"] = settings_parser["settings"].getint("scale_y", fallback=450)
     SETTINGS["run_minimized"] = settings_parser["settings"].getboolean("run_minimized", fallback=True)
-    # SETTINGS["start_menu"] = settings_parser["settings"].getboolean("start_menu", fallback=False)
 
 def load_texts():
     global TEXTS
@@ -212,6 +211,23 @@ def on_close(tray):
     tray.stop()
 
 def _open_manage_window():
+    def window_add_to_list(path):
+        if path and path.lower().endswith(".exe"):
+            normpath = os.path.normpath(path)
+
+            for app in APPS:
+                if os.path.normpath(app.get("path")) == normpath:
+                    return
+
+            app = {
+                "name": window_get_app_name(path),
+                "path": normpath,
+                "enabled": True
+            }
+
+            APPS.append(app)
+            window_update_list()
+
     def window_close():
         SETTINGS["pos_x"], SETTINGS["pos_y"], SETTINGS["scale_x"], SETTINGS["scale_y"] = window.winfo_x(), window.winfo_y(), window.winfo_width(), window.winfo_height()
         save_settings()
@@ -265,19 +281,7 @@ def _open_manage_window():
             filetypes=[(TEXTS["exe_desc_popup"], "*.exe")]
         )
 
-        if path and os.path.splitext(path)[1].lower() == ".exe":
-            for app in APPS:
-                if app.get("path") == path:
-                    return
-
-            app = {
-                "name": window_get_app_name(path),
-                "path": path,
-                "enabled": True
-            }
-
-            APPS.append(app)
-            window_update_list()
+        window_add_to_list(path)
 
     def window_update_list(save=True):
         apps_tree.delete(*apps_tree.get_children())
@@ -303,7 +307,31 @@ def _open_manage_window():
         apps_tree.column("name", width=int(columns_width * 0.33))
         apps_tree.column("path", width=int(columns_width * 0.65))
 
-    window = tk.Tk()
+    def window_remove_all_apps():
+        if not APPS:
+            return
+
+        confirm = messagebox.askyesno(
+            TEXTS["remove_popup"],
+            TEXTS["remove_all_confirm_popup"]
+        )
+
+        if confirm:
+            APPS.clear()
+            window_update_list()
+
+    def window_drop_file(event):
+        files = window.tk.splitlist(event.data)
+
+        for path in files:
+            if path.lower().endswith(".lnk"):
+                shell = win32com.client.Dispatch("WScript.Shell")
+                shortcut = shell.CreateShortcut(path)
+                path = shortcut.TargetPath
+
+            window_add_to_list(path)
+
+    window = TkinterDnD.Tk()
 
     window.title(TEXTS["title_window"])
     window.iconbitmap(ICON_ON_PATH)
@@ -331,6 +359,9 @@ def _open_manage_window():
 
     apps_tree.tag_configure("missing", foreground="gray")
 
+    apps_tree.drop_target_register(DND_FILES)
+    apps_tree.dnd_bind("<<Drop>>", window_drop_file)
+
     scrollbar.config(command=apps_tree.yview)
 
     button_frame = ttk.Frame(window)
@@ -338,6 +369,7 @@ def _open_manage_window():
 
     ttk.Button(button_frame, text=TEXTS["add_window"], command=window_add_app).pack(side="left", padx=(0, 10))
     ttk.Button(button_frame, text=TEXTS["remove_window"], command=window_remove_app).pack(side="left", padx=(0, 10))
+    ttk.Button(button_frame, text=TEXTS["remove_all_window"], command=window_remove_all_apps).pack(side="left", padx=(0, 10))
 
     window_update_list(False)
 
